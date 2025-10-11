@@ -5,7 +5,6 @@
 ---
 
 ![BudgetBaddie Logo](docs/logo.jpg)
-*Replace the path with your actual logo file.*
 
 ---
 
