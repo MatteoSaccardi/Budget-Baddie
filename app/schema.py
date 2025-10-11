@@ -1,28 +1,49 @@
 import sys
 from pathlib import Path
-
-# Add project root to sys.path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from app.db import engine, get_session
 from app.models import Base, Category, Subcategory, Expense, Income, MonthlyBudget
-from sqlalchemy import func, extract, and_
-from datetime import date, datetime
+from sqlalchemy import func, extract
+from sqlalchemy.orm import joinedload, aliased
+from datetime import date
 import pandas as pd
 from typing import Optional, List
 
 def init_db():
     Base.metadata.create_all(bind=engine)
 
+# -------------------------------
 # Category helpers
-def create_category(name: str, description: str = "") -> Category:
+# -------------------------------
+
+def create_category(name: str, description: str = "", recurrent: bool = False, expected_monthly: float = 0.0) -> Category:
     s = get_session()
-    c = Category(name=name.strip(), description=description)
+    c = Category(name=name.strip(), description=description, recurrent=recurrent, expected_monthly=expected_monthly)
     s.add(c)
     s.commit()
     s.refresh(c)
     s.close()
     return c
+
+def update_category(category_id: int, name: str = None, description: str = None,
+                    recurrent: bool = None, expected_monthly: float = None):
+    s = get_session()
+    c = s.query(Category).get(category_id)
+    if not c:
+        s.close()
+        return False
+    if name is not None:
+        c.name = name.strip()
+    if description is not None:
+        c.description = description
+    if recurrent is not None:
+        c.recurrent = recurrent
+    if expected_monthly is not None:
+        c.expected_monthly = expected_monthly
+    s.commit()
+    s.close()
+    return True
 
 def create_subcategory(category_id: int, name: str, description: str = "", labels: Optional[List[str]] = None) -> Subcategory:
     s = get_session()
@@ -34,18 +55,32 @@ def create_subcategory(category_id: int, name: str, description: str = "", label
     return sc
 
 def list_categories():
-    s = get_session()
-    cats = s.query(Category).all()
-    s.close()
-    return cats
+    with get_session() as s:
+        cats = s.query(Category).options(joinedload(Category.subcategories)).all()
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "description": c.description,
+                "recurrent": c.recurrent,
+                "expected_monthly": c.expected_monthly,
+                "subcategories": [
+                    {
+                        "id": sc.id,
+                        "name": sc.name,
+                        "description": sc.description,
+                        "labels": sc.labels,
+                    }
+                    for sc in c.subcategories
+                ],
+            }
+            for c in cats
+        ]
 
-def get_category_by_name(name: str):
-    s = get_session()
-    c = s.query(Category).filter(func.lower(Category.name) == name.lower()).first()
-    s.close()
-    return c
-
+# -------------------------------
 # Expense / Income
+# -------------------------------
+
 def add_expense(d: date, amount: float, category_id: int, subcategory_id: Optional[int] = None,
                 description: str = "", expected: bool = False) -> Expense:
     s = get_session()
@@ -66,53 +101,81 @@ def add_income(d: date, amount: float, description: str = "") -> Income:
     s.close()
     return inc
 
-# Monthly queries
-def expenses_frame(year: int, month: int, include_expected: bool = True, include_real: bool = True) -> pd.DataFrame:
+def update_subcategory(subcategory_id: int, name: str = None, description: str = None, labels: list = None):
     s = get_session()
-    q = s.query(Expense, Category.name.label("category"), Subcategory.name.label("subcategory")).join(Category).outerjoin(Subcategory)
-    q = q.filter(extract("year", Expense.date) == year, extract("month", Expense.date) == month)
-    df = pd.DataFrame(
-        [{
-            "id": e.Expense.id,
-            "date": e.Expense.date,
-            "amount": e.Expense.amount,
-            "description": e.Expense.description,
-            "category": e.category,
-            "subcategory": e.subcategory,
-            "expected": e.Expense.expected
-        } for e in q]
+    sc = s.query(Subcategory).get(subcategory_id)
+    if not sc:
+        s.close()
+        return False
+    if name is not None:
+        sc.name = name.strip()
+    if description is not None:
+        sc.description = description
+    if labels is not None:
+        sc.labels = ",".join(labels)
+    s.commit()
+    s.close()
+    return True
+
+# -------------------------------
+# Monthly / Summary
+# -------------------------------
+
+def expenses_frame(year: int, month: int) -> pd.DataFrame:
+    s = get_session()
+    Cat = aliased(Category)
+    Sub = aliased(Subcategory)
+    q = (
+        s.query(
+            Expense,
+            Cat.name.label("category"),
+            Sub.name.label("subcategory")
+        )
+        .join(Cat, Expense.category_id == Cat.id)
+        .outerjoin(Sub, Expense.subcategory_id == Sub.id)
+        .filter(extract("year", Expense.date) == year, extract("month", Expense.date) == month)
     )
+    df = pd.DataFrame([{
+        "id": e.Expense.id,
+        "date": e.Expense.date,
+        "amount": e.Expense.amount,
+        "description": e.Expense.description,
+        "category": e.category,
+        "subcategory": e.subcategory,
+        "expected": e.Expense.expected
+    } for e in q])
     s.close()
     return df
 
-def monthly_summary(year: int, month: int) -> dict:
+def list_recent_expenses(limit: int = 10, include_expected: bool = True):
     s = get_session()
-    # incomes
-    incomes = s.query(func.sum(Income.amount)).filter(extract("year", Income.date) == year, extract("month", Income.date) == month).scalar() or 0.0
-    # expenses real
-    real = s.query(func.sum(Expense.amount)).filter(extract("year", Expense.date) == year, extract("month", Expense.date) == month, Expense.expected == False).scalar() or 0.0
-    expected = s.query(func.sum(Expense.amount)).filter(extract("year", Expense.date) == year, extract("month", Expense.date) == month, Expense.expected == True).scalar() or 0.0
-    # breakdown by category (real + expected)
-    cat_q = s.query(Category.name, func.sum(Expense.amount).label("total"), Expense.expected).join(Expense).filter(extract("year", Expense.date) == year, extract("month", Expense.date) == month).group_by(Category.name, Expense.expected).all()
-    breakdown = {}
-    for name, total, exp_flag in cat_q:
-        if name not in breakdown: breakdown[name] = {"real": 0.0, "expected": 0.0}
-        if exp_flag:
-            breakdown[name]["expected"] = float(total)
-        else:
-            breakdown[name]["real"] = float(total)
-    s.close()
-    return {"incomes": float(incomes), "real_expenses": float(real), "expected_expenses": float(expected), "by_category": breakdown}
+    from sqlalchemy.orm import aliased
 
-def category_expected_for_month(year: int, month: int):
-    s = get_session()
-    rows = s.query(MonthlyBudget, Category.name).join(Category).filter(MonthlyBudget.year==year, MonthlyBudget.month==month).all()
-    s.close()
-    return [{"category": r[1], "expected": r[0].expected_amount} for r in rows]
+    Cat = aliased(Category)
+    Sub = aliased(Subcategory)
 
-# Utility exports
-def export_month_csv(year: int, month: int, path: str):
-    df = expenses_frame(year, month)
-    df.to_csv(path, index=False)
-    return path
+    q = s.query(
+        Expense,
+        Cat.name.label("category"),
+        Sub.name.label("subcategory")
+    ).select_from(Expense) \
+     .join(Cat, Expense.category_id == Cat.id) \
+     .outerjoin(Sub, Expense.subcategory_id == Sub.id) \
+     .order_by(Expense.date.desc(), Expense.id.desc())
+
+    if not include_expected:
+        q = q.filter(Expense.expected == False)
+
+    q = q.limit(limit)
+    result = [{
+        "id": e.Expense.id,
+        "date": e.Expense.date,
+        "amount": e.Expense.amount,
+        "description": e.Expense.description,
+        "category": e.category,
+        "subcategory": e.subcategory,
+        "expected": e.Expense.expected
+    } for e in q]
+    s.close()
+    return result
 
