@@ -27,6 +27,8 @@
 
 ### Setup
 
+0. Unable any aliasing, e.g. ```unalias python3```, ```unalias pip```, etc.
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/MatteoSaccardi/budgetbaddie.git
