@@ -2,9 +2,9 @@
   <img src="docs/logo.png" alt="BudgetBuddy Logo" width="180"/>
 </p>
 
-# 💰 BudgetBaddie
+# 💰 Budget Baddie
 
-**BudgetBaddie** is a simple, pythonic personal budget tracker that helps you manage your expenses, incomes, and recurring categories. Visualize your spending and stay on top of your finances effortlessly!
+**Budget Baddie** is a simple, pythonic personal budget tracker that helps you manage your expenses, incomes, and recurring categories. Visualize your spending and stay on top of your finances effortlessly!
 
 ---
 
@@ -46,8 +46,8 @@ Budget-Baddie/
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/MatteoSaccardi/budgetbaddie.git
-   cd budgetbaddie
+   git clone https://github.com/MatteoSaccardi/budget-baddie.git
+   cd budget-baddie
    ```
 
 2. Create and activate virtual environment:
