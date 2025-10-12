@@ -12,13 +12,16 @@ from app.schema import (
 # -------------------------------
 # INITIALIZATION
 # -------------------------------
-st.set_page_config(page_title="BUDdyGET", layout="wide")
+st.set_page_config(page_title="Budget Baddie", layout="wide")
+# Display logo at the top
+# st.image("docs/logo.png", width=150)  # Adjust width as needed
 init_db()
 today = date.today()
 
 # -------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------
+st.sidebar.image("docs/logo.png", width=200)  # Logo at top of sidebar
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to page", [
     "Overview",
@@ -38,7 +41,7 @@ def get_cats_dict():
 # PAGE: OVERVIEW
 # -------------------------------
 if page == "Overview":
-    st.title("💸 BUDdyGET — Overview")
+    st.title("💸 Budget Baddie — Overview")
     
     st.header("🧾 Recent Expenses")
     recent = list_recent_expenses(limit=10)
