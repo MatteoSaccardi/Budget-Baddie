@@ -1,10 +1,10 @@
+<p align="center">
+  <img src="docs/logo.png" alt="BudgetBuddy Logo" width="180"/>
+</p>
+
 # 💰 BudgetBaddie
 
 **BudgetBaddie** is a simple, pythonic personal budget tracker that helps you manage your expenses, incomes, and recurring categories. Visualize your spending and stay on top of your finances effortlessly!
-
----
-
-![BudgetBaddie Logo](docs/logo.jpg)
 
 ---
 
@@ -16,6 +16,21 @@
 - Visualize spending with monthly or yearly summaries
 - Export your data easily
 - Interactive web interface using **Streamlit**
+
+---
+
+## Project Structure
+
+Budget-Baddie/
+├── app/
+│ ├── models.py
+│ ├── schema.py
+│ ├── streamlit_app.py
+│ └── static/
+│ └── logo.png
+├── requirements.txt
+├── README.md
+└── .venv/
 
 ---
 
