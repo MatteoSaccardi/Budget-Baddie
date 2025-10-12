@@ -19,7 +19,7 @@
 
 ---
 
-## Project Structure
+<!-- ## Project Structure
 
 Budget-Baddie/
 ├── app/
@@ -32,7 +32,7 @@ Budget-Baddie/
 ├── README.md
 └── .venv/
 
----
+--- -->
 
 ## Getting Started (Local)
 
