@@ -78,7 +78,7 @@ Budget-Baddie/
    export BB_PATH="/path/to/budget-baddie"
    alias budget='source ${BB_PATH}/.venv/bin/activate && PYTHONPATH=${BB_PATH} streamlit run ${BB_PATH}/app/streamlit_app.py'
    ```
-  and run `budget` from any directory.
+   Then, you can easily run `budget` from any directory.
 
 8. Enjoy tracking your finances with Budget Baddie ✌️
 
