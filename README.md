@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="BudgetBuddy Logo" width="180"/>
+  <img src="/Users/matteo/Packages/Budget-Baddie/docs/logo.png" alt="BudgetBuddy Logo" width="180"/>
 </p>
 
 # 💰 Budget Baddie
@@ -123,4 +123,4 @@ Contributions are welcome! You can email me at [my personal email](mailto:matteo
 
 ## License
 
-This project is licensed under the [MIT License](docs/LICENSE.md) Matteo Saccardi
+This project is licensed under the [MIT License](/Users/matteo/Packages/Budget-Baddie/docs/LICENSE.md) Matteo Saccardi
