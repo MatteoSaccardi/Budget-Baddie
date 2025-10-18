@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="/Users/matteo/Packages/Budget-Baddie/docs/logo.png" alt="BudgetBuddy Logo" width="180"/>
+  <img src="docs/logo.png" alt="BudgetBuddy Logo" width="180"/>
 </p>
 
 # 💰 Budget Baddie

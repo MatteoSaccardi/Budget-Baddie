@@ -12,6 +12,10 @@ from app.schema import (
     expenses_frame, list_recent_expenses, list_incomes
 )
 
+import os
+BASE_DIR = os.path.dirname(__file__)
+logo_path = os.path.join(BASE_DIR, "docs", "logo.png")
+
 # -------------------------------
 # INITIALIZATION
 # -------------------------------
@@ -22,7 +26,7 @@ today = date.today()
 # -------------------------------
 # SIDEBAR NAVIGATION
 # -------------------------------
-st.sidebar.image("/Users/matteo/Packages/Budget-Baddie/docs/logo.png", width=200)  # Logo at top of sidebar
+st.sidebar.image(logo_path, width=200)  # Logo at top of sidebar
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to page", [
     "Overview",
