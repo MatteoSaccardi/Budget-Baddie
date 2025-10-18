@@ -14,7 +14,7 @@ from app.schema import (
 
 import os
 BASE_DIR = os.path.dirname(__file__)
-logo_path = os.path.join(BASE_DIR, "docs", "logo.png")
+logo_path = BASE_DIR + "/../docs/logo.png"
 
 # -------------------------------
 # INITIALIZATION
