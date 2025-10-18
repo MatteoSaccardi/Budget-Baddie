@@ -132,4 +132,4 @@ Contributions are welcome! You can email me at [my personal email](mailto:matteo
 
 ## License
 
-This project is licensed under the [MIT License](docs/LICENSE.md) Matteo Saccardi
+This project is licensed under the [MIT License](docs/LICENSE.md) (c) Matteo Saccardi
