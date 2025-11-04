@@ -188,6 +188,77 @@ if page == "Overview":
             mime="text/csv",
         )
 
+        # -------------------------------
+        # Income vs Expenses breakdown
+        # -------------------------------
+        st.header("💵 Income vs Expenses Overview")
+
+        # Load all incomes
+        incomes = pd.DataFrame(list_incomes(limit=1000))
+        if not incomes.empty:
+            incomes["amount"] = pd.to_numeric(incomes["amount"], errors="coerce").fillna(0)
+            incomes["date"] = pd.to_datetime(incomes["date"], errors="coerce")
+
+            # Filter incomes by selected years and months
+            selected_month_nums = []
+            for year in selected_years:
+                if "All" in selected_months:
+                    selected_month_nums.extend([(year, m) for m in range(1, 13)])
+                else:
+                    selected_month_nums.extend([(year, month_to_num[m]) for m in selected_months])
+
+            def is_in_selected_period(row):
+                y, m = row["date"].year, row["date"].month
+                return (y, m) in selected_month_nums
+
+            incomes = incomes[incomes.apply(is_in_selected_period, axis=1)]
+            total_income = incomes["amount"].sum()
+        else:
+            total_income = 0.0
+
+        # Split expenses into unexpected/emergency vs others
+        if "category" in df.columns and "amount" in df.columns:
+            df["is_emergency"] = df["category"].apply(lambda x: str(x).lower().strip() == "unexpected / emergencies")
+            total_emergency = df[df["is_emergency"]]["amount"].sum()
+            total_other_exp = df[~df["is_emergency"]]["amount"].sum()
+        else:
+            total_emergency = total_other_exp = 0.0
+
+        # Prepare data for visualization
+        summary_df = pd.DataFrame([
+            {"Category": "Income", "Type": "Income", "Amount (€)": total_income},
+            {"Category": "Expenses", "Type": "Expected", "Amount (€)": total_other_exp},
+            {"Category": "Expenses", "Type": "Unexpected", "Amount (€)": total_emergency},
+        ])
+
+        # --- Create stacked bar chart ---
+        fig_income_exp = px.bar(
+            summary_df,
+            x="Category",
+            y="Amount (€)",
+            color="Type",
+            text_auto=".2f",
+            title="Income vs Expenses (Expected vs Unexpected)",
+        )
+
+        fig_income_exp.update_layout(
+            yaxis_title="Amount (€)",
+            xaxis_title="",
+            barmode="stack",
+            legend_title_text=""
+        )
+        st.plotly_chart(fig_income_exp, use_container_width=True)
+
+        # Text summary
+        total_expenses = total_emergency + total_other_exp
+        balance = total_income - total_expenses
+        st.markdown(
+            f"**💰 Total income:** €{total_income:,.2f}  \n"
+            f"**💸 Total expenses:** €{total_expenses:,.2f}  "
+            f"(_Expected: €{total_emergency:,.2f}, Unexpected: €{total_other_exp:,.2f}_)  \n\n"
+            f"**⚖️ Net balance:** €{balance:,.2f}  "
+            + ("✅ Surplus" if balance >= 0 else "🚨 Deficit")
+        )
 
 # -------------------------------
 # PAGE: MANAGE EXPENSES
