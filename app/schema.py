@@ -37,7 +37,7 @@ def init_db():
             )
         """)
 
-        # Expenses
+        # Expenses — added 'currency'
         cur.execute("""
             CREATE TABLE IF NOT EXISTS expenses (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,12 +47,13 @@ def init_db():
                 subcategory_id INTEGER,
                 description TEXT,
                 expected BOOLEAN DEFAULT 0,
+                currency TEXT DEFAULT 'EUR',
                 FOREIGN KEY(category_id) REFERENCES categories(id),
                 FOREIGN KEY(subcategory_id) REFERENCES subcategories(id)
             )
         """)
 
-        # Income
+        # Income — added 'currency'
         cur.execute("""
             CREATE TABLE IF NOT EXISTS income (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,12 +62,14 @@ def init_db():
                 category_id INTEGER,
                 subcategory_id INTEGER,
                 description TEXT,
+                currency TEXT DEFAULT 'EUR',
                 FOREIGN KEY(category_id) REFERENCES categories(id),
                 FOREIGN KEY(subcategory_id) REFERENCES subcategories(id)
             )
         """)
 
         conn.commit()
+
 
 # -------------------------------
 # CATEGORY FUNCTIONS
@@ -139,21 +142,22 @@ def delete_subcategory(subcategory_id):
 # -------------------------------
 # EXPENSE FUNCTIONS
 # -------------------------------
-def add_expense(exp_date, amount, category_id, subcategory_id, description, expected=False):
+def add_expense(exp_date, amount, category_id, subcategory_id, description, expected=False, currency="EUR"):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO expenses (date, amount, category_id, subcategory_id, description, expected)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (exp_date.isoformat(), amount, category_id, subcategory_id, description, expected))
+            INSERT INTO expenses (date, amount, category_id, subcategory_id, description, expected, currency)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (exp_date.isoformat(), amount, category_id, subcategory_id, description, expected, currency))
         conn.commit()
 
-def update_expense(expense_id, exp_date, amount, category_id, subcategory_id, description, expected):
+
+def update_expense(expense_id, exp_date, amount, category_id, subcategory_id, description, expected, currency="EUR"):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             UPDATE expenses 
-            SET date=?, amount=?, category_id=?, subcategory_id=?, description=?, expected=?
+            SET date=?, amount=?, category_id=?, subcategory_id=?, description=?, expected=?, currency=?
             WHERE id=?
-        """, (exp_date.isoformat(), amount, category_id, subcategory_id, description, expected, expense_id))
+        """, (exp_date.isoformat(), amount, category_id, subcategory_id, description, expected, currency, expense_id))
         conn.commit()
 
 def delete_expense(expense_id):
@@ -165,7 +169,7 @@ def list_recent_expenses(limit=20):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-            SELECT e.id, e.date, e.amount, c.name as category, s.name as subcategory, e.description, e.expected
+            SELECT e.id, e.date, e.amount, e.currency, c.name as category, s.name as subcategory, e.description, e.expected
             FROM expenses e
             LEFT JOIN categories c ON e.category_id = c.id
             LEFT JOIN subcategories s ON e.subcategory_id = s.id
@@ -197,21 +201,22 @@ def expenses_frame(year=None, month=None):
 # -------------------------------
 # INCOME FUNCTIONS
 # -------------------------------
-def add_income(inc_date, amount, category_id, subcategory_id, description):
+def add_income(inc_date, amount, category_id, subcategory_id, description, currency="EUR"):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO income (date, amount, category_id, subcategory_id, description)
-            VALUES (?, ?, ?, ?, ?)
-        """, (inc_date.isoformat(), amount, category_id, subcategory_id, description))
+            INSERT INTO income (date, amount, category_id, subcategory_id, description, currency)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (inc_date.isoformat(), amount, category_id, subcategory_id, description, currency))
         conn.commit()
 
-def update_income(income_id, inc_date, amount, category_id, subcategory_id, description):
+
+def update_income(income_id, inc_date, amount, category_id, subcategory_id, description, currency="EUR"):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             UPDATE income 
-            SET date=?, amount=?, category_id=?, subcategory_id=?, description=? 
+            SET date=?, amount=?, category_id=?, subcategory_id=?, description=?, currency=? 
             WHERE id=?
-        """, (inc_date.isoformat(), amount, category_id, subcategory_id, description, income_id))
+        """, (inc_date.isoformat(), amount, category_id, subcategory_id, description, currency, income_id))
         conn.commit()
 
 def delete_income(income_id):
@@ -223,7 +228,7 @@ def list_incomes(limit=20):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-            SELECT i.id, i.date, i.amount, c.name as category, s.name as subcategory, i.description
+            SELECT i.id, i.date, i.amount, i.currency, c.name as category, s.name as subcategory, i.description
             FROM income i
             LEFT JOIN categories c ON i.category_id = c.id
             LEFT JOIN subcategories s ON i.subcategory_id = s.id
@@ -231,3 +236,4 @@ def list_incomes(limit=20):
             LIMIT ?
         """, (limit,)).fetchall()
         return [dict(r) for r in rows]
+

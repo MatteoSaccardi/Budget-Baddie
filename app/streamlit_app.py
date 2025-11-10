@@ -1,39 +1,18 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.express as px
 from datetime import date
 import calendar
-import plotly.express as px
+import requests
+import os
+import shutil
 
 from app.schema import (
     init_db, list_categories, create_category, update_category, delete_category,
     create_subcategory, update_subcategory, delete_subcategory,
     add_expense, add_income, delete_expense, delete_income,
-    expenses_frame, list_recent_expenses, list_incomes
+    expenses_frame, list_recent_expenses, list_incomes, update_expense, update_income
 )
-
-import os
-BASE_DIR = os.path.dirname(__file__)
-logo_path = BASE_DIR + "/../docs/logo.png"
-
-# -------------------------------
-# INITIALIZATION
-# -------------------------------
-st.set_page_config(page_title="Budget Baddie", layout="wide")
-init_db()
-today = date.today()
-
-# -------------------------------
-# SIDEBAR NAVIGATION
-# -------------------------------
-st.sidebar.image(logo_path, width=200)  # Logo at top of sidebar
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to page", [
-    "Overview",
-    "Manage Expenses & Income",
-    "Manage Categories",
-    "Export Data"
-])
 
 # -------------------------------
 # HELPER FUNCTIONS
@@ -42,350 +21,343 @@ def get_cats_dict():
     cats = list_categories()
     return {c["name"]: c["id"] for c in cats}
 
+from app.schema import DB_PATH
+
+def backup_db():
+    backup_path = os.path.join(os.path.dirname(DB_PATH), "budget_backup.db")
+    if os.path.exists(DB_PATH):
+        shutil.copyfile(DB_PATH, backup_path)
+        print(f"Database backed up to {backup_path}")
+    else:
+        print("No database file to backup.")
+
+# -------------------------------
+# Currency utilities
+# -------------------------------
+@st.cache_data(ttl=3600)
+def fetch_rates(base="EUR", targets=["EUR", "USD", "GBP"]):
+    try:
+        url = f"https://api.exchangerate.host/latest?base={base}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        rates = {cur: data["rates"].get(cur, None) for cur in targets}
+    except Exception:
+        rates = {"EUR": 1.0, "USD": 1.1, "GBP": 0.85}
+    return rates
+
+def currency_selector():
+    st.sidebar.markdown("### 💱 Currency Settings")
+
+    base = "EUR"
+    targets = ["EUR", "USD", "GBP"]
+    rates = fetch_rates(base, targets)
+
+    display_currency = st.sidebar.selectbox("Display currency", targets, index=0)
+    st.sidebar.caption("Live rates from exchangerate.host")
+
+    st.sidebar.write("Override rates (optional):")
+    user_rate_USD = st.sidebar.number_input("EUR → USD", value=rates.get("USD", 1.1), format="%.4f")
+    user_rate_GBP = st.sidebar.number_input("EUR → GBP", value=rates.get("GBP", 0.85), format="%.4f")
+
+    rates["USD"] = user_rate_USD
+    rates["GBP"] = user_rate_GBP
+    rates["EUR"] = 1.0
+
+    return display_currency, rates
+
+def convert_value(amount, from_currency, to_currency, rates):
+    if from_currency == to_currency:
+        return amount
+    try:
+        eur_amount = amount / rates.get(from_currency, 1.0)
+        return eur_amount * rates.get(to_currency, 1.0)
+    except Exception:
+        return amount
+
+def to_display_currency(amount, row_currency, target_currency, rates):
+    """Convert amount from row_currency to target_currency using rates dict."""
+    if row_currency == target_currency:
+        return amount
+    else:
+        # Convert to EUR first, then to target
+        eur_amount = amount / rates.get(row_currency, 1)
+        return eur_amount * rates.get(target_currency, 1)
+
+# -------------------------------
+# Setup
+# -------------------------------
+
+BASE_DIR = os.path.dirname(__file__)
+st.set_page_config(page_title="Budget Baddie", layout="wide")
+init_db()
+today = date.today()
+# Backup DB on start
+backup_db()
+
+# -------------------------------
+# Sidebar navigation
+# -------------------------------
+st.sidebar.title("Budget Baddie")
+page = st.sidebar.radio("Go to page", [
+    "Overview",
+    "Manage Expenses & Income",
+    "Manage Categories",
+    "Export Data"
+])
+display_currency, rates = currency_selector()
+
 # -------------------------------
 # PAGE: OVERVIEW
 # -------------------------------
 if page == "Overview":
-    st.title("💸 Budget Baddie — Overview")
-    
+    st.title("💸 Overview")
+
+    # Recent Expenses
     st.header("🧾 Recent Expenses")
-    recent_exp = list_recent_expenses(limit=10)
-    if recent_exp:
-        st.dataframe(pd.DataFrame(recent_exp))
+    recent_exp = pd.DataFrame(list_recent_expenses(limit=10))
+    if not recent_exp.empty:
+        recent_exp["Converted amount"] = recent_exp.apply(
+            lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates), axis=1
+        )
+        recent_exp.rename(columns={
+            "amount": f"Amount ({recent_exp.get('currency', 'EUR').iloc[0] if 'currency' in recent_exp else 'EUR'})",
+            "Converted amount": f"Converted amount ({display_currency})"
+        }, inplace=True)
+        st.dataframe(recent_exp)
     else:
         st.info("No recent expenses yet.")
 
+    # Recent Income
     st.header("💰 Recent Income")
-    recent_inc = list_incomes(limit=10)
-    if recent_inc:
-        st.dataframe(pd.DataFrame(recent_inc))
+    recent_inc = pd.DataFrame(list_incomes(limit=10))
+    if not recent_inc.empty:
+        recent_inc["Converted amount"] = recent_inc.apply(
+            lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates), axis=1
+        )
+        recent_inc.rename(columns={
+            "amount": f"Amount ({recent_inc.get('currency', 'EUR').iloc[0] if 'currency' in recent_inc else 'EUR'})",
+            "Converted amount": f"Converted amount ({display_currency})"
+        }, inplace=True)
+        st.dataframe(recent_inc)
     else:
         st.info("No recent income yet.")
 
+    # Expense Overview
     st.header("📊 Expense Overview")
     today = date.today()
     all_years = list(range(today.year - 5, today.year + 1))
-    selected_years = st.multiselect("Select year(s) to include", all_years, default=[today.year])
+    selected_years = st.multiselect("Select year(s)", all_years, default=[today.year])
 
     df = pd.DataFrame()
     month_to_num = {name: i for i, name in enumerate(list(calendar.month_name)[1:], start=1)}
-    month_names = list(calendar.month_name)[1:]
 
+    selected_months = ["All"]
     for year in selected_years:
-        default_month_name = calendar.month_name[today.month]
-        options = ["All"] + month_names
-        default_value = [default_month_name] if len(selected_years) > 1 else ["All"]
-        # Ensure defaults are valid
-        default_value = [v for v in default_value if v in options]
-        selected_months = st.multiselect(
-            f"Select month(s) for {year}",
-            options,
-            default=default_value,
-        )
         month_nums = list(range(1, 13)) if "All" in selected_months else [month_to_num[m] for m in selected_months]
         for month in month_nums:
             df = pd.concat([df, expenses_frame(year, month)], ignore_index=True)
 
-    # if df.empty:
-    #     st.warning("No expenses found for the selected period.")
-    # else:
-    #     st.dataframe(df)
-    #     fig_cat, ax_cat = plt.subplots()
-    #     by_cat = df.groupby("category")["amount"].sum()
-    #     ax_cat.pie(by_cat, labels=by_cat.index, autopct="%1.1f%%", startangle=90)
-    #     ax_cat.axis("equal")
-    #     st.pyplot(fig_cat)
-
-    #     for cat, subdf in df.groupby("category"):
-    #         sub_by = subdf.groupby("subcategory")["amount"].sum()
-    #         if len(sub_by) > 1:
-    #             st.subheader(f"Subcategory breakdown: {cat}")
-    #             fig_sub, ax_sub = plt.subplots()
-    #             ax_sub.pie(sub_by, labels=sub_by.index, autopct="%1.1f%%", startangle=90)
-    #             ax_sub.axis("equal")
-    #             st.pyplot(fig_sub)
-
-    # st.header("📈 Expected vs Real Spending (Recurrent Categories)")
-    # cats_df = pd.DataFrame(list_categories())
-    # if "recurrent" in cats_df.columns:
-    #     recurrent_cats = cats_df[cats_df["recurrent"]]
-    # else:
-    #     recurrent_cats = pd.DataFrame()
-    # if recurrent_cats.empty:
-    #     st.info("No recurrent categories found.")
-    # elif df.empty:
-    #     st.info("No expenses found for the selected period, cannot compute Expected vs Real.")
-
-    # else:
-    #     by_cat_real = df.groupby("category")["amount"].sum().reindex(recurrent_cats["name"], fill_value=0.0)
-    #     expected_vals = recurrent_cats.set_index("name")["expected_monthly"]
-    #     combined = pd.DataFrame({"Expected": expected_vals, "Real": by_cat_real})
-    #     st.bar_chart(combined)
-
     if df.empty:
-        st.warning("No expenses found for the selected period.")
+        st.warning("No expenses for selected period.")
     else:
-        # Merge expected monthly values for recurrent categories
-        cats_df = pd.DataFrame(list_categories())
-        if "expected_monthly" in cats_df.columns:
-            expected_map = cats_df.set_index("name")["expected_monthly"].to_dict()
-            # Replace boolean expected column with actual expected amount
-            df["expected"] = df.apply(
-                lambda row: expected_map.get(row["category"], 0.0) if row.get("expected") else 0.0,
-                axis=1
-            )
-
+        df["Converted amount"] = df.apply(
+            lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates), axis=1
+        )
+        df.rename(columns={
+            "amount": f"Amount ({df.get('currency', 'EUR').iloc[0] if 'currency' in df else 'EUR'})",
+            "Converted amount": f"Converted amount ({display_currency})"
+        }, inplace=True)
         st.dataframe(df)
 
-        # Expense overview by category (interactive)
-        by_cat = df.groupby("category")["amount"].sum().reset_index()
-        fig_cat = px.pie(
-            by_cat,
-            names="category",
-            values="amount",
-            title="Expenses by Category",
-            hover_data={"amount": ":.2f"},
-        )
+        # Pie chart by category
+        by_cat = df.groupby("category")[f"Converted amount ({display_currency})"].sum().reset_index()
+        fig_cat = px.pie(by_cat, names="category", values=f"Converted amount ({display_currency})",
+                         title=f"Expenses by Category ({display_currency})")
         st.plotly_chart(fig_cat, use_container_width=True)
 
-        # st.header("📈 Expected vs Real Spending (Recurrent Categories)")
-        cats_df = pd.DataFrame(list_categories())
-        if "recurrent" in cats_df.columns:
-            recurrent_cats = cats_df[cats_df["recurrent"]]
-        else:
-            recurrent_cats = pd.DataFrame()
-        if recurrent_cats.empty:
-            st.info("No recurrent categories found.")
-        elif df.empty:
-            st.info("No expenses found for the selected period, cannot compute Expected vs Real.")
-
-        else:
-            by_cat_real = df.groupby("category")["amount"].sum().reindex(recurrent_cats["name"], fill_value=0.0)
-            expected_vals = recurrent_cats.set_index("name")["expected_monthly"]
-            combined = pd.DataFrame({"Expected": expected_vals, "Real": by_cat_real})
-            st.bar_chart(combined)
-
-        # Subcategory breakdown
-        for cat, subdf in df.groupby("category"):
-            sub_by = subdf.groupby("subcategory")["amount"].sum().reset_index()
-            if len(sub_by) > 1:
-                st.subheader(f"Subcategory breakdown: {cat}")
-                fig_sub = px.pie(
-                    sub_by,
-                    names="subcategory",
-                    values="amount",
-                    hover_data={"amount": ":.2f"},
-                    title=f"Subcategories of {cat}",
-                )
-                st.plotly_chart(fig_sub, use_container_width=True)
-            
-        # Download button
-        csv = df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="Download Expenses CSV",
-            data=csv,
-            file_name="expenses_overview.csv",
-            mime="text/csv",
-        )
-
-        # -------------------------------
-        # Income vs Expenses breakdown
-        # -------------------------------
+        # Income vs Expenses
         st.header("💵 Income vs Expenses Overview")
 
-        # Load all incomes
         incomes = pd.DataFrame(list_incomes(limit=1000))
         if not incomes.empty:
-            incomes["amount"] = pd.to_numeric(incomes["amount"], errors="coerce").fillna(0)
-            incomes["date"] = pd.to_datetime(incomes["date"], errors="coerce")
-
-            # Filter incomes by selected years and months
-            selected_month_nums = []
-            for year in selected_years:
-                if "All" in selected_months:
-                    selected_month_nums.extend([(year, m) for m in range(1, 13)])
-                else:
-                    selected_month_nums.extend([(year, month_to_num[m]) for m in selected_months])
-
-            def is_in_selected_period(row):
-                y, m = row["date"].year, row["date"].month
-                return (y, m) in selected_month_nums
-
-            incomes = incomes[incomes.apply(is_in_selected_period, axis=1)]
-            total_income = incomes["amount"].sum()
+            incomes["Converted amount"] = incomes.apply(
+                lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates), axis=1
+            )
+            total_income = incomes["Converted amount"].sum()
         else:
             total_income = 0.0
 
-        # Split expenses into unexpected/emergency vs others
-        if "category" in df.columns and "amount" in df.columns:
-            df["is_emergency"] = df["category"].apply(lambda x: str(x).lower().strip() == "unexpected / emergencies")
-            total_emergency = df[df["is_emergency"]]["amount"].sum()
-            total_other_exp = df[~df["is_emergency"]]["amount"].sum()
-        else:
-            total_emergency = total_other_exp = 0.0
+        df["is_emergency"] = df["category"].apply(lambda x: str(x).lower().strip() == "unexpected / emergencies")
+        total_emergency = df[df["is_emergency"]][f"Converted amount ({display_currency})"].sum()
+        total_other_exp = df[~df["is_emergency"]][f"Converted amount ({display_currency})"].sum()
 
-        # Prepare data for visualization
         summary_df = pd.DataFrame([
-            {"Category": "Income", "Type": "Income", "Amount (€)": total_income},
-            {"Category": "Expenses", "Type": "Expected", "Amount (€)": total_other_exp},
-            {"Category": "Expenses", "Type": "Unexpected", "Amount (€)": total_emergency},
+            {"Category": "Income", "Type": "Income", f"Amount ({display_currency})": total_income},
+            {"Category": "Expenses", "Type": "Expected", f"Amount ({display_currency})": total_other_exp},
+            {"Category": "Expenses", "Type": "Unexpected", f"Amount ({display_currency})": total_emergency},
         ])
 
-        # --- Create stacked bar chart ---
         fig_income_exp = px.bar(
             summary_df,
             x="Category",
-            y="Amount (€)",
+            y=f"Amount ({display_currency})",
             color="Type",
             text_auto=".2f",
-            title="Income vs Expenses (Expected vs Unexpected)",
+            title=f"Income vs Expenses (Expected vs Unexpected) — {display_currency}",
         )
-
-        fig_income_exp.update_layout(
-            yaxis_title="Amount (€)",
-            xaxis_title="",
-            barmode="stack",
-            legend_title_text=""
-        )
+        fig_income_exp.update_layout(barmode="stack", legend_title_text="")
         st.plotly_chart(fig_income_exp, use_container_width=True)
 
-        # Text summary
         total_expenses = total_emergency + total_other_exp
         balance = total_income - total_expenses
         st.markdown(
-            f"**💰 Total income:** €{total_income:,.2f}  \n"
-            f"**💸 Total expenses:** €{total_expenses:,.2f}  "
-            f"(_Expected: €{total_emergency:,.2f}, Unexpected: €{total_other_exp:,.2f}_)  \n\n"
-            f"**⚖️ Net balance:** €{balance:,.2f}  "
+            f"**💰 Total income:** {total_income:,.2f} {display_currency}  \n"
+            f"**💸 Total expenses:** {total_expenses:,.2f} {display_currency}  "
+            f"(_Expected: {total_other_exp:,.2f}, Unexpected: {total_emergency:,.2f}_)  \n\n"
+            f"**⚖️ Net balance:** {balance:,.2f} {display_currency}  "
             + ("✅ Surplus" if balance >= 0 else "🚨 Deficit")
         )
 
 # -------------------------------
-# PAGE: MANAGE EXPENSES
+# PAGE: MANAGE EXPENSES & INCOME
 # -------------------------------
 elif page == "Manage Expenses & Income":
     st.title("🧾 Manage Expenses & Income")
 
-    st.header("Add New Expense")
-    cats_dict = get_cats_dict()
-    if not cats_dict:
-        st.warning("No categories defined. Add categories first.")
+    # --- Add Expense ---
+    st.header("Add / Edit Expense")
+    cats = list_categories()
+    if not cats:
+        st.warning("No categories defined.")
     else:
-        cat_name = st.selectbox("Category", options=list(cats_dict.keys()), key="new_exp_cat")
-        cat_id = cats_dict[cat_name]
-        subcategories = {sc["name"]: sc["id"] for c in list_categories() if c["id"] == cat_id for sc in c["subcategories"]}
-        sub_name = st.selectbox("Subcategory (optional)", options=[""] + list(subcategories.keys()), key="new_exp_sub")
-        sub_id = subcategories.get(sub_name) if sub_name else None
+        cat_map = {c["name"]: c["id"] for c in cats}
+        cat_name = st.selectbox("Category", options=list(cat_map.keys()))
+        cat_id = cat_map[cat_name]
 
-        exp_date = st.date_input("Date", value=today, key="new_exp_date")
-        amount = st.number_input("Amount (€)", min_value=0.0, format="%.2f", key="new_exp_amount")
-        desc = st.text_area("Description", key="new_exp_desc")
-        expected = st.checkbox("Expected (planned) expense?", key="new_exp_expected")
+        subs = {sc["name"]: sc["id"] for c in cats if c["id"] == cat_id for sc in c["subcategories"]}
+        sub_name = st.selectbox("Subcategory", options=[""] + list(subs.keys()))
+        sub_id = subs.get(sub_name) if sub_name else None
 
-        if st.button("Add Expense", key="btn_add_exp"):
-            add_expense(exp_date, amount, cat_id, sub_id, desc, expected)
+        exp_date = st.date_input("Date", value=today)
+        exp_currency = st.selectbox("Currency", ["EUR", "USD", "GBP"], index=0)
+        exp_amount = st.number_input(f"Amount ({exp_currency})", min_value=0.0, format="%.2f")
+        desc = st.text_area("Description")
+        expected = st.checkbox("Expected?")
+
+        if st.button("Add Expense"):
+            add_expense(exp_date, exp_amount, cat_id, sub_id, desc, expected, exp_currency)
             st.success("Expense added!")
 
-    st.markdown("---")
-    st.header("Edit Existing Expenses")
-
-    expenses = list_recent_expenses(limit=1000)
-    expenses_df = pd.DataFrame(expenses)
-
-    if expenses_df.empty:
-        st.info("No expenses found.")
+    st.subheader("Edit/Delete Existing Expenses")
+    expenses = pd.DataFrame(list_recent_expenses(limit=50))
+    if expenses.empty:
+        st.info("No expenses to edit.")
     else:
-        expenses_df = expenses_df.sort_values(by=["date", "id"], ascending=[False, False])
-        st.dataframe(expenses_df)
+        for i, row in expenses.iterrows():
+            with st.expander(f"🧾 {row['description']} — {row['amount']} {row.get('currency', 'EUR')}"):
+                new_desc = st.text_input("Description", value=row["description"], key=f"exp_desc_{row['id']}")
+                new_amount = st.number_input("Amount", value=float(row["amount"]), min_value=0.0, format="%.2f", key=f"exp_amt_{row['id']}")
+                new_currency = st.selectbox(
+                    "Currency",
+                    ["EUR", "USD", "GBP"],
+                    index=["EUR", "USD", "GBP"].index(row.get("currency", "EUR")),
+                    key=f"exp_curr_{row['id']}"
+                )
 
-        df_exp = expenses_df.reset_index(drop=True)
-        selected_expense_id = st.selectbox(
-            "Select an expense to edit",
-            options=df_exp["id"],
-            format_func=lambda eid: (
-                df_exp.loc[df_exp["id"] == eid, "description"].values[0]
-                if df_exp.loc[df_exp["id"] == eid, "description"].values[0]
-                else df_exp.loc[df_exp["id"] == eid, "category"].values[0]
-            ) + f" ({df_exp.loc[df_exp['id'] == eid, 'amount'].values[0]}€)"
-        )
+                # Category and subcategory
+                cats_dict = get_cats_dict()
+                new_cat_name = st.selectbox(
+                    "Category",
+                    options=list(cats_dict.keys()),
+                    index=list(cats_dict.keys()).index(row["category"]),
+                    key=f"exp_cat_{row['id']}"
+                )
+                new_cat_id = cats_dict[new_cat_name]
 
-        exp = df_exp[df_exp["id"] == selected_expense_id].iloc[0]
+                subcategories = {sc["name"]: sc["id"] for c in list_categories() if c["id"] == new_cat_id for sc in c["subcategories"]}
+                new_sub_name = st.selectbox(
+                    "Subcategory (optional)",
+                    options=[""] + list(subcategories.keys()),
+                    index=([""] + list(subcategories.keys())).index(row["subcategory"]) if row["subcategory"] in subcategories else 0,
+                    key=f"exp_sub_{row['id']}"
+                )
+                new_sub_id = subcategories.get(new_sub_name) if new_sub_name else None
 
-        # Editable fields
+                # Expected checkbox
+                new_expected = st.checkbox("Expected (planned)?", value=bool(row.get("expected", False)), key=f"exp_expected_{row['id']}")
+
+                new_date = st.date_input("Date", value=pd.to_datetime(row["date"]).date(), key=f"exp_date_{row['id']}")
+
+                if st.button("Save changes", key=f"save_exp_{row['id']}"):
+                    update_expense(
+                        expense_id=row["id"],
+                        exp_date=new_date,
+                        amount=new_amount,
+                        category_id=new_cat_id,
+                        subcategory_id=new_sub_id,
+                        description=new_desc,
+                        expected=new_expected,
+                        currency=new_currency
+                    )
+                    st.success("Expense updated!")
+
+                if st.button("Delete", key=f"del_exp_{row['id']}"):
+                    delete_expense(row["id"])
+                    st.warning("Expense deleted!")
+
+    st.markdown("---")
+
+    st.subheader("Edit/Delete Existing Income")
+    incomes = pd.DataFrame(list_incomes(limit=50))
+    if incomes.empty:
+        st.info("No income entries to edit.")
+    else:
         cats_dict = get_cats_dict()
-        cat_name = st.selectbox(
-            "Category",
-            options=list(cats_dict.keys()),
-            index=list(cats_dict.keys()).index(exp["category"]),
-            key=f"edit_cat_{selected_expense_id}"
-        )
-        cat_id = cats_dict[cat_name]
+        for i, row in incomes.iterrows():
+            with st.expander(f"💵 {row['description']} — {row['amount']} {row.get('currency', 'EUR')}"):
+                # Editable fields
+                new_desc = st.text_input("Description", value=row.get("description", ""), key=f"inc_desc_{row['id']}")
+                new_amount = st.number_input(
+                    "Amount",
+                    value=float(row.get("amount", 0.0)),
+                    min_value=0.0,
+                    format="%.2f",
+                    key=f"inc_amt_{row['id']}"
+                )
+                new_currency = st.selectbox(
+                    "Currency",
+                    ["EUR", "USD", "GBP"],
+                    index=["EUR", "USD", "GBP"].index(row.get("currency", "EUR")),
+                    key=f"inc_curr_{row['id']}"
+                )
+                new_date = st.date_input(
+                    "Date",
+                    value=pd.to_datetime(row.get("date", date.today())).date(),
+                    key=f"inc_date_{row['id']}"
+                )
 
-        subcategories = {sc["name"]: sc["id"] for c in list_categories() if c["id"] == cat_id for sc in c["subcategories"]}
-        sub_name = st.selectbox(
-            "Subcategory (optional)",
-            options=[""] + list(subcategories.keys()),
-            index=([""] + list(subcategories.keys())).index(exp["subcategory"]) if exp["subcategory"] in subcategories else 0,
-            key=f"edit_sub_{selected_expense_id}"
-        )
-        sub_id = subcategories.get(sub_name) if sub_name else None
+                # Preserve old category/subcategory if present
+                cat_id = row.get("category_id", None)
+                sub_id = row.get("subcategory_id", None)
 
-        new_date = st.date_input("Date", value=pd.to_datetime(exp["date"]).date(), key=f"edit_date_{selected_expense_id}")
-        new_amount = st.number_input("Amount (€)", min_value=0.0, value=float(exp["amount"]), format="%.2f", key=f"edit_amt_{selected_expense_id}")
-        new_desc = st.text_area("Description", value=exp["description"], key=f"edit_desc_{selected_expense_id}")
-        new_expected = st.checkbox("Expected (planned)?", value=bool(exp["expected"]), key=f"edit_expected_{selected_expense_id}")
-
-        if st.button("💾 Save Changes", key=f"save_exp_{selected_expense_id}"):
-            from app.schema import update_expense
-            update_expense(
-                expense_id=selected_expense_id,
-                exp_date=new_date,
-                amount=new_amount,
-                category_id=cat_id,
-                subcategory_id=sub_id,
-                description=new_desc,
-                expected=new_expected
-            )
-            st.success("Expense updated!")
-
-        if st.button("🗑️ Delete Expense", key=f"delete_exp_{selected_expense_id}"):
-            from app.schema import delete_expense
-            delete_expense(selected_expense_id)
-            st.warning("Expense deleted!")
-
-    # --- Income ---
-    st.subheader("➕ Add Income")
-    if cats_dict:
-        inc_cat_name = st.selectbox("Income Category", options=list(cats_dict.keys()), key="inc_cat")
-        inc_cat_id = cats_dict[inc_cat_name]
-        inc_sub_name = st.selectbox("Subcategory (optional)", options=[""] + list(subcategories.keys()), key="inc_sub")
-        inc_sub_id = subcategories.get(inc_sub_name) if inc_sub_name else None
-
-        inc_date = st.date_input("Date", value=today, key="inc_date")
-        inc_amount = st.number_input("Amount (€)", min_value=0.0, format="%.2f", key="inc_amount")
-        inc_desc = st.text_area("Description", key="inc_desc")
-
-        if st.button("Add Income", key="add_income"):
-            add_income(inc_date, inc_amount, inc_cat_id, inc_sub_id, inc_desc)
-            st.success("Income added!")
-
-    st.subheader("📝 Edit / Delete Income")
-    df_inc = pd.DataFrame(list_incomes(limit=1000))
-    if not df_inc.empty:
-        for _, row in df_inc.iterrows():
-            with st.expander(f"{row['date']} — {row['category']} — €{row['amount']}"):
-                new_date = st.date_input("Date", value=pd.to_datetime(row['date']).date(), key=f"inc_date_{row['id']}")
-                new_amount = st.number_input("Amount (€)", min_value=0.0, value=row['amount'], format="%.2f", key=f"inc_amount_{row['id']}")
-                new_desc = st.text_area("Description", value=row['description'], key=f"inc_desc_{row['id']}")
-
-                if st.button("💾 Update Income", key=f"upd_inc_{row['id']}"):
-                    add_income(new_date, new_amount, inc_cat_id, inc_sub_id, new_desc)
-                    delete_income(row['id'])
+                # Save changes button
+                if st.button("Save changes", key=f"save_inc_{row['id']}"):
+                    update_income(
+                        income_id=row["id"],
+                        amount=new_amount,
+                        description=new_desc,
+                        currency=new_currency,
+                        inc_date=new_date,
+                        category_id=cat_id,
+                        subcategory_id=sub_id
+                    )
                     st.success("Income updated!")
 
-                if st.button("🗑 Delete Income", key=f"del_inc_{row['id']}"):
-                    delete_income(row['id'])
-                    st.success("Income deleted!")
+                # Delete button
+                if st.button("Delete", key=f"del_inc_{row['id']}"):
+                    delete_income(row["id"])
+                    st.warning("Income deleted!")
+
 
 # -------------------------------
 # PAGE: MANAGE CATEGORIES
