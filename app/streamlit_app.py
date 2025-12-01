@@ -97,10 +97,14 @@ backup_db()
 # -------------------------------
 # Sidebar navigation
 # -------------------------------
-st.sidebar.title("Budget Baddie")
+LOGO_PATH = BASE_DIR+"/../docs/logo.png"
+# st.sidebar.title("Budget Baddie")
+st.sidebar.image(LOGO_PATH, use_container_width=True)
+st.sidebar.markdown("---")  # nice separator, optional
 page = st.sidebar.radio("Go to page", [
     "Overview",
-    "Manage Expenses & Income",
+    "Manage Expenses",
+    "Manage Income",
     "Manage Categories",
     "Export Data"
 ])
@@ -145,84 +149,125 @@ if page == "Overview":
     # Expense Overview
     st.header("📊 Expense Overview")
     today = date.today()
+    # ---- YEAR SELECTOR ----
     all_years = list(range(today.year - 5, today.year + 1))
     selected_years = st.multiselect("Select year(s)", all_years, default=[today.year])
 
-    df = pd.DataFrame()
-    month_to_num = {name: i for i, name in enumerate(list(calendar.month_name)[1:], start=1)}
+    # ---- MONTH SELECTOR ----
+    month_names = list(calendar.month_name)[1:]           # ["January", ..., "December"]
+    month_options = ["All"] + month_names                 # add "All"
 
-    selected_months = ["All"]
+    selected_months = st.multiselect(
+        "Select months (default: All)",
+        month_options,
+        default=["All"]
+    )
+
+    # Convert month names → numbers only if not "All"
+    if "All" in selected_months:
+        selected_month_nums = list(range(1, 13))
+    else:
+        month_to_num = {name: i for i, name in enumerate(month_names, start=1)}
+        selected_month_nums = [month_to_num[m] for m in selected_months]
+
+    # ---- BUILD FILTERED DF ----
+    df = pd.DataFrame()
+
     for year in selected_years:
-        month_nums = list(range(1, 13)) if "All" in selected_months else [month_to_num[m] for m in selected_months]
-        for month in month_nums:
-            df = pd.concat([df, expenses_frame(year, month)], ignore_index=True)
+        for month in selected_month_nums:
+            df_month = expenses_frame(year, month)
+            if df_month is not None and not df_month.empty:
+                df = pd.concat([df, df_month], ignore_index=True)
 
     if df.empty:
-        st.warning("No expenses for selected period.")
+        st.warning("No expenses for the selected period.")
+        st.stop()
+
+    # ---- CURRENCY CONVERSION ----
+    df["Converted amount"] = df.apply(
+        lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates),
+        axis=1
+    )
+
+    df.rename(columns={
+        "amount": f"Amount ({df.get('currency', 'EUR').iloc[0] if 'currency' in df else 'EUR'})",
+        "Converted amount": f"Converted amount ({display_currency})"
+    }, inplace=True)
+
+    st.dataframe(df)
+
+    # ---------------------------
+    # Pie chart by category
+    # ---------------------------
+    by_cat = df.groupby("category")[f"Converted amount ({display_currency})"].sum().reset_index()
+
+    fig_cat = px.pie(
+        by_cat,
+        names="category",
+        values=f"Converted amount ({display_currency})",
+        title=f"Expenses by Category ({display_currency})"
+    )
+
+    st.plotly_chart(fig_cat, use_container_width=True)
+
+    # ---------------------------
+    # INCOME VS EXPENSES
+    # ---------------------------
+    st.header("💵 Income vs Expenses Overview")
+
+    incomes = pd.DataFrame(list_incomes(limit=1000))
+
+    if not incomes.empty:
+        incomes["Converted amount"] = incomes.apply(
+            lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates),
+            axis=1
+        )
+        total_income = incomes["Converted amount"].sum()
     else:
-        df["Converted amount"] = df.apply(
-            lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates), axis=1
-        )
-        df.rename(columns={
-            "amount": f"Amount ({df.get('currency', 'EUR').iloc[0] if 'currency' in df else 'EUR'})",
-            "Converted amount": f"Converted amount ({display_currency})"
-        }, inplace=True)
-        st.dataframe(df)
+        total_income = 0.0
 
-        # Pie chart by category
-        by_cat = df.groupby("category")[f"Converted amount ({display_currency})"].sum().reset_index()
-        fig_cat = px.pie(by_cat, names="category", values=f"Converted amount ({display_currency})",
-                         title=f"Expenses by Category ({display_currency})")
-        st.plotly_chart(fig_cat, use_container_width=True)
+    df["is_emergency"] = df["category"].apply(
+        lambda x: str(x).lower().strip() == "unexpected / emergencies"
+    )
 
-        # Income vs Expenses
-        st.header("💵 Income vs Expenses Overview")
+    total_emergency = df[df["is_emergency"]][f"Converted amount ({display_currency})"].sum()
+    total_other_exp = df[~df["is_emergency"]][f"Converted amount ({display_currency})"].sum()
 
-        incomes = pd.DataFrame(list_incomes(limit=1000))
-        if not incomes.empty:
-            incomes["Converted amount"] = incomes.apply(
-                lambda r: convert_value(r["amount"], r.get("currency", "EUR"), display_currency, rates), axis=1
-            )
-            total_income = incomes["Converted amount"].sum()
-        else:
-            total_income = 0.0
+    summary_df = pd.DataFrame([
+        {"Category": "Income", "Type": "Income", f"Amount ({display_currency})": total_income},
+        {"Category": "Expenses", "Type": "Expected", f"Amount ({display_currency})": total_other_exp},
+        {"Category": "Expenses", "Type": "Unexpected", f"Amount ({display_currency})": total_emergency},
+    ])
 
-        df["is_emergency"] = df["category"].apply(lambda x: str(x).lower().strip() == "unexpected / emergencies")
-        total_emergency = df[df["is_emergency"]][f"Converted amount ({display_currency})"].sum()
-        total_other_exp = df[~df["is_emergency"]][f"Converted amount ({display_currency})"].sum()
+    fig_income_exp = px.bar(
+        summary_df,
+        x="Category",
+        y=f"Amount ({display_currency})",
+        color="Type",
+        text_auto=".2f",
+        title=f"Income vs Expenses (Expected vs Unexpected) — {display_currency}",
+    )
 
-        summary_df = pd.DataFrame([
-            {"Category": "Income", "Type": "Income", f"Amount ({display_currency})": total_income},
-            {"Category": "Expenses", "Type": "Expected", f"Amount ({display_currency})": total_other_exp},
-            {"Category": "Expenses", "Type": "Unexpected", f"Amount ({display_currency})": total_emergency},
-        ])
+    fig_income_exp.update_layout(barmode="stack", legend_title_text="")
+    st.plotly_chart(fig_income_exp, use_container_width=True)
 
-        fig_income_exp = px.bar(
-            summary_df,
-            x="Category",
-            y=f"Amount ({display_currency})",
-            color="Type",
-            text_auto=".2f",
-            title=f"Income vs Expenses (Expected vs Unexpected) — {display_currency}",
-        )
-        fig_income_exp.update_layout(barmode="stack", legend_title_text="")
-        st.plotly_chart(fig_income_exp, use_container_width=True)
+    # ---- SUMMARY ----
+    total_expenses = total_emergency + total_other_exp
+    balance = total_income - total_expenses
 
-        total_expenses = total_emergency + total_other_exp
-        balance = total_income - total_expenses
-        st.markdown(
-            f"**💰 Total income:** {total_income:,.2f} {display_currency}  \n"
-            f"**💸 Total expenses:** {total_expenses:,.2f} {display_currency}  "
-            f"(_Expected: {total_other_exp:,.2f}, Unexpected: {total_emergency:,.2f}_)  \n\n"
-            f"**⚖️ Net balance:** {balance:,.2f} {display_currency}  "
-            + ("✅ Surplus" if balance >= 0 else "🚨 Deficit")
-        )
+    st.markdown(
+        f"**💰 Total income:** {total_income:,.2f} {display_currency}  \n"
+        f"**💸 Total expenses:** {total_expenses:,.2f} {display_currency}  "
+        f"(_Expected: {total_other_exp:,.2f}, Unexpected: {total_emergency:,.2f}_)  \n\n"
+        f"**⚖️ Net balance:** {balance:,.2f} {display_currency}  "
+        + ("✅ Surplus" if balance >= 0 else "🚨 Deficit")
+    )
 
 # -------------------------------
-# PAGE: MANAGE EXPENSES & INCOME
+# PAGE: MANAGE EXPENSES
 # -------------------------------
-elif page == "Manage Expenses & Income":
-    st.title("🧾 Manage Expenses & Income")
+elif page == "Manage Expenses":
+    st.title("🧾 Manage Expenses")
 
     # --- Add Expense ---
     st.header("Add / Edit Expense")
@@ -304,6 +349,50 @@ elif page == "Manage Expenses & Income":
                 if st.button("Delete", key=f"del_exp_{row['id']}"):
                     delete_expense(row["id"])
                     st.warning("Expense deleted!")
+
+# -------------------------------
+# PAGE: MANAGE INCOME
+# -------------------------------
+elif page == "Manage Income":
+    st.title("🧾 Manage Income")
+
+    st.header("Add Income")
+
+    cats = list_categories()
+    if not cats:
+        st.warning("No categories defined. Create one first.")
+    else:
+        # Category selector
+        cat_map = {c["name"]: c["id"] for c in cats}
+        inc_cat_name = st.selectbox("Category", options=list(cat_map.keys()), key="add_inc_cat")
+        inc_cat_id = cat_map[inc_cat_name]
+
+        # Subcategory selector
+        sub_map = {
+            sc["name"]: sc["id"]
+            for c in cats if c["id"] == inc_cat_id
+            for sc in c["subcategories"]
+        }
+        inc_sub_name = st.selectbox("Subcategory (optional)", options=[""] + list(sub_map.keys()), key="add_inc_sub")
+        inc_sub_id = sub_map.get(inc_sub_name) if inc_sub_name else None
+
+        # Other fields
+        inc_date = st.date_input("Date", value=today, key="add_inc_date")
+        inc_currency = st.selectbox("Currency", ["EUR", "USD", "GBP"], index=0, key="add_inc_curr")
+        inc_amount = st.number_input(f"Amount ({inc_currency})", min_value=0.0, format="%.2f", key="add_inc_amount")
+        inc_desc = st.text_area("Description", key="add_inc_desc")
+
+        # Add button
+        if st.button("Add Income", key="btn_add_income"):
+            add_income(
+                inc_date,
+                inc_amount,
+                inc_cat_id,
+                inc_sub_id,
+                inc_desc,
+                inc_currency
+            )
+            st.success("Income added!")
 
     st.markdown("---")
 
