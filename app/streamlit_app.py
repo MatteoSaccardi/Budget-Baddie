@@ -6,6 +6,7 @@ import calendar
 import requests
 import os
 import shutil
+import json
 
 from app.schema import (
     init_db, list_categories, create_category, update_category, delete_category,
@@ -20,6 +21,23 @@ from app.schema import (
 def get_cats_dict():
     cats = list_categories()
     return {c["name"]: c["id"] for c in cats}
+
+def filter_categories(category_type):
+    return [
+        c for c in list_categories()
+        if c.get("category_type", "expense") in {category_type, "both"}
+    ]
+
+def parse_labels(raw_labels):
+    if not raw_labels:
+        return []
+    if isinstance(raw_labels, list):
+        return raw_labels
+    try:
+        parsed = json.loads(raw_labels)
+        return parsed if isinstance(parsed, list) else []
+    except (TypeError, json.JSONDecodeError):
+        return []
 
 from app.schema import DB_PATH
 
@@ -271,9 +289,9 @@ elif page == "Manage Expenses":
 
     # --- Add Expense ---
     st.header("Add / Edit Expense")
-    cats = list_categories()
+    cats = filter_categories("expense")
     if not cats:
-        st.warning("No categories defined.")
+        st.warning("No expense categories defined.")
     else:
         cat_map = {c["name"]: c["id"] for c in cats}
         cat_name = st.selectbox("Category", options=list(cat_map.keys()))
@@ -298,57 +316,63 @@ elif page == "Manage Expenses":
     if expenses.empty:
         st.info("No expenses to edit.")
     else:
-        for i, row in expenses.iterrows():
-            with st.expander(f"🧾 {row['description']} — {row['amount']} {row.get('currency', 'EUR')}"):
-                new_desc = st.text_input("Description", value=row["description"], key=f"exp_desc_{row['id']}")
-                new_amount = st.number_input("Amount", value=float(row["amount"]), min_value=0.0, format="%.2f", key=f"exp_amt_{row['id']}")
-                new_currency = st.selectbox(
-                    "Currency",
-                    ["EUR", "USD", "GBP"],
-                    index=["EUR", "USD", "GBP"].index(row.get("currency", "EUR")),
-                    key=f"exp_curr_{row['id']}"
-                )
-
-                # Category and subcategory
-                cats_dict = get_cats_dict()
-                new_cat_name = st.selectbox(
-                    "Category",
-                    options=list(cats_dict.keys()),
-                    index=list(cats_dict.keys()).index(row["category"]),
-                    key=f"exp_cat_{row['id']}"
-                )
-                new_cat_id = cats_dict[new_cat_name]
-
-                subcategories = {sc["name"]: sc["id"] for c in list_categories() if c["id"] == new_cat_id for sc in c["subcategories"]}
-                new_sub_name = st.selectbox(
-                    "Subcategory (optional)",
-                    options=[""] + list(subcategories.keys()),
-                    index=([""] + list(subcategories.keys())).index(row["subcategory"]) if row["subcategory"] in subcategories else 0,
-                    key=f"exp_sub_{row['id']}"
-                )
-                new_sub_id = subcategories.get(new_sub_name) if new_sub_name else None
-
-                # Expected checkbox
-                new_expected = st.checkbox("Expected (planned)?", value=bool(row.get("expected", False)), key=f"exp_expected_{row['id']}")
-
-                new_date = st.date_input("Date", value=pd.to_datetime(row["date"]).date(), key=f"exp_date_{row['id']}")
-
-                if st.button("Save changes", key=f"save_exp_{row['id']}"):
-                    update_expense(
-                        expense_id=row["id"],
-                        exp_date=new_date,
-                        amount=new_amount,
-                        category_id=new_cat_id,
-                        subcategory_id=new_sub_id,
-                        description=new_desc,
-                        expected=new_expected,
-                        currency=new_currency
+        expense_cats = filter_categories("expense")
+        if not expense_cats:
+            st.warning("Expense entries exist, but there are no categories marked as Expense or Both.")
+        else:
+            for i, row in expenses.iterrows():
+                with st.expander(f"🧾 {row['description']} — {row['amount']} {row.get('currency', 'EUR')}"):
+                    new_desc = st.text_input("Description", value=row["description"], key=f"exp_desc_{row['id']}")
+                    new_amount = st.number_input("Amount", value=float(row["amount"]), min_value=0.0, format="%.2f", key=f"exp_amt_{row['id']}")
+                    new_currency = st.selectbox(
+                        "Currency",
+                        ["EUR", "USD", "GBP"],
+                        index=["EUR", "USD", "GBP"].index(row.get("currency", "EUR")),
+                        key=f"exp_curr_{row['id']}"
                     )
-                    st.success("Expense updated!")
 
-                if st.button("Delete", key=f"del_exp_{row['id']}"):
-                    delete_expense(row["id"])
-                    st.warning("Expense deleted!")
+                    cats_dict = {c["name"]: c["id"] for c in expense_cats}
+                    new_cat_name = st.selectbox(
+                        "Category",
+                        options=list(cats_dict.keys()),
+                        index=list(cats_dict.keys()).index(row["category"]) if row["category"] in cats_dict else 0,
+                        key=f"exp_cat_{row['id']}"
+                    )
+                    new_cat_id = cats_dict[new_cat_name]
+
+                    subcategories = {
+                        sc["name"]: sc["id"]
+                        for c in expense_cats
+                        if c["id"] == new_cat_id
+                        for sc in c["subcategories"]
+                    }
+                    new_sub_name = st.selectbox(
+                        "Subcategory (optional)",
+                        options=[""] + list(subcategories.keys()),
+                        index=([""] + list(subcategories.keys())).index(row["subcategory"]) if row["subcategory"] in subcategories else 0,
+                        key=f"exp_sub_{row['id']}"
+                    )
+                    new_sub_id = subcategories.get(new_sub_name) if new_sub_name else None
+
+                    new_expected = st.checkbox("Expected (planned)?", value=bool(row.get("expected", False)), key=f"exp_expected_{row['id']}")
+                    new_date = st.date_input("Date", value=pd.to_datetime(row["date"]).date(), key=f"exp_date_{row['id']}")
+
+                    if st.button("Save changes", key=f"save_exp_{row['id']}"):
+                        update_expense(
+                            expense_id=row["id"],
+                            exp_date=new_date,
+                            amount=new_amount,
+                            category_id=new_cat_id,
+                            subcategory_id=new_sub_id,
+                            description=new_desc,
+                            expected=new_expected,
+                            currency=new_currency
+                        )
+                        st.success("Expense updated!")
+
+                    if st.button("Delete", key=f"del_exp_{row['id']}"):
+                        delete_expense(row["id"])
+                        st.warning("Expense deleted!")
 
 # -------------------------------
 # PAGE: MANAGE INCOME
@@ -358,9 +382,9 @@ elif page == "Manage Income":
 
     st.header("Add Income")
 
-    cats = list_categories()
+    cats = filter_categories("income")
     if not cats:
-        st.warning("No categories defined. Create one first.")
+        st.warning("No income categories defined. Create one first.")
     else:
         # Category selector
         cat_map = {c["name"]: c["id"] for c in cats}
@@ -401,51 +425,70 @@ elif page == "Manage Income":
     if incomes.empty:
         st.info("No income entries to edit.")
     else:
-        cats_dict = get_cats_dict()
-        for i, row in incomes.iterrows():
-            with st.expander(f"💵 {row['description']} — {row['amount']} {row.get('currency', 'EUR')}"):
-                # Editable fields
-                new_desc = st.text_input("Description", value=row.get("description", ""), key=f"inc_desc_{row['id']}")
-                new_amount = st.number_input(
-                    "Amount",
-                    value=float(row.get("amount", 0.0)),
-                    min_value=0.0,
-                    format="%.2f",
-                    key=f"inc_amt_{row['id']}"
-                )
-                new_currency = st.selectbox(
-                    "Currency",
-                    ["EUR", "USD", "GBP"],
-                    index=["EUR", "USD", "GBP"].index(row.get("currency", "EUR")),
-                    key=f"inc_curr_{row['id']}"
-                )
-                new_date = st.date_input(
-                    "Date",
-                    value=pd.to_datetime(row.get("date", date.today())).date(),
-                    key=f"inc_date_{row['id']}"
-                )
-
-                # Preserve old category/subcategory if present
-                cat_id = row.get("category_id", None)
-                sub_id = row.get("subcategory_id", None)
-
-                # Save changes button
-                if st.button("Save changes", key=f"save_inc_{row['id']}"):
-                    update_income(
-                        income_id=row["id"],
-                        amount=new_amount,
-                        description=new_desc,
-                        currency=new_currency,
-                        inc_date=new_date,
-                        category_id=cat_id,
-                        subcategory_id=sub_id
+        income_cats = filter_categories("income")
+        if not income_cats:
+            st.warning("Income entries exist, but there are no categories marked as Income or Both.")
+        else:
+            cats_dict = {c["name"]: c["id"] for c in income_cats}
+            for i, row in incomes.iterrows():
+                with st.expander(f"💵 {row['description']} — {row['amount']} {row.get('currency', 'EUR')}"):
+                    new_desc = st.text_input("Description", value=row.get("description", ""), key=f"inc_desc_{row['id']}")
+                    new_amount = st.number_input(
+                        "Amount",
+                        value=float(row.get("amount", 0.0)),
+                        min_value=0.0,
+                        format="%.2f",
+                        key=f"inc_amt_{row['id']}"
                     )
-                    st.success("Income updated!")
+                    new_currency = st.selectbox(
+                        "Currency",
+                        ["EUR", "USD", "GBP"],
+                        index=["EUR", "USD", "GBP"].index(row.get("currency", "EUR")),
+                        key=f"inc_curr_{row['id']}"
+                    )
+                    new_date = st.date_input(
+                        "Date",
+                        value=pd.to_datetime(row.get("date", date.today())).date(),
+                        key=f"inc_date_{row['id']}"
+                    )
 
-                # Delete button
-                if st.button("Delete", key=f"del_inc_{row['id']}"):
-                    delete_income(row["id"])
-                    st.warning("Income deleted!")
+                    new_cat_name = st.selectbox(
+                        "Category",
+                        options=list(cats_dict.keys()),
+                        index=list(cats_dict.keys()).index(row["category"]) if row["category"] in cats_dict else 0,
+                        key=f"inc_cat_{row['id']}"
+                    )
+                    new_cat_id = cats_dict[new_cat_name]
+
+                    subcategories = {
+                        sc["name"]: sc["id"]
+                        for c in income_cats
+                        if c["id"] == new_cat_id
+                        for sc in c["subcategories"]
+                    }
+                    new_sub_name = st.selectbox(
+                        "Subcategory (optional)",
+                        options=[""] + list(subcategories.keys()),
+                        index=([""] + list(subcategories.keys())).index(row["subcategory"]) if row["subcategory"] in subcategories else 0,
+                        key=f"inc_sub_{row['id']}"
+                    )
+                    new_sub_id = subcategories.get(new_sub_name) if new_sub_name else None
+
+                    if st.button("Save changes", key=f"save_inc_{row['id']}"):
+                        update_income(
+                            income_id=row["id"],
+                            amount=new_amount,
+                            description=new_desc,
+                            currency=new_currency,
+                            inc_date=new_date,
+                            category_id=new_cat_id,
+                            subcategory_id=new_sub_id
+                        )
+                        st.success("Income updated!")
+
+                    if st.button("Delete", key=f"del_inc_{row['id']}"):
+                        delete_income(row["id"])
+                        st.warning("Income deleted!")
 
 
 # -------------------------------
@@ -457,62 +500,117 @@ elif page == "Manage Categories":
     
     for c in cats:
         with st.expander(f"{c['name']}"):
-            # Editable fields for category itself
-            new_name = st.text_input("Category Name", c["name"], key=f"name_{c['id']}")
-            new_desc = st.text_area("Description", c["description"], key=f"desc_{c['id']}")
-            recur = st.checkbox("Recurrent", value=c["recurrent"], key=f"recur_{c['id']}")
-            exp_val = st.number_input("Expected monthly (€)", min_value=0.0, value=c["expected_monthly"], format="%.2f", key=f"exp_{c['id']}")
-            
-            # Save category changes
-            if st.button("💾 Save Category", key=f"save_cat_{c['id']}"):
+            with st.form(f"cat_form_{c['id']}"):
+                new_name = st.text_input("Category Name", c["name"], key=f"name_{c['id']}")
+                new_desc = st.text_area("Description", c["description"], key=f"desc_{c['id']}")
+                category_type = st.selectbox(
+                    "Category Type",
+                    options=["expense", "income", "both"],
+                    index=["expense", "income", "both"].index(c.get("category_type", "expense")),
+                    format_func=lambda value: value.capitalize(),
+                    key=f"type_{c['id']}"
+                )
+                recur = st.checkbox("Recurrent", value=c["recurrent"], key=f"recur_{c['id']}")
+                exp_val = st.number_input("Expected monthly (€)", min_value=0.0, value=c["expected_monthly"], format="%.2f", key=f"exp_{c['id']}")
+
+                save_cat = st.form_submit_button("Save Category")
+                delete_cat = st.form_submit_button("Delete Category")
+
+            if save_cat:
                 update_category(
                     category_id=c["id"],
                     name=new_name,
                     description=new_desc,
                     recurrent=recur,
-                    expected_monthly=exp_val
+                    expected_monthly=exp_val,
+                    category_type=category_type
                 )
                 st.success(f"Category '{new_name}' updated!")
+                st.rerun()
 
-            if st.button("🗑 Delete Category", key=f"del_cat_{c['id']}"):
+            if delete_cat:
                 delete_category(c["id"])
                 st.success(f"Category '{new_name}' deleted!")
+                st.rerun()
 
             st.markdown("---")
             st.subheader("Subcategories")
-            
-            # Editable existing subcategories
-            for sc in c["subcategories"]:
-                sc_name = st.text_input("Subcategory Name", sc["name"], key=f"sc_name_{sc['id']}")
-                sc_desc = st.text_area("Description", sc["description"], key=f"sc_desc_{sc['id']}")
-                
-                if st.button("💾 Save Subcategory", key=f"save_sc_{sc['id']}"):
-                    update_subcategory(sc["id"], name=sc_name, description=sc_desc)
-                    st.success(f"Subcategory '{sc_name}' updated!")
+            if not c["subcategories"]:
+                st.caption("No subcategories yet for this category.")
 
-                if st.button("🗑 Delete Subcategory", key=f"del_sc_{sc['id']}"):
+            for sc in c["subcategories"]:
+                current_labels = ", ".join(parse_labels(sc.get("labels")))
+                with st.form(f"subcat_form_{sc['id']}"):
+                    sc_name = st.text_input("Subcategory Name", sc["name"], key=f"sc_name_{sc['id']}")
+                    sc_desc = st.text_area("Description", sc["description"], key=f"sc_desc_{sc['id']}")
+                    sc_labels = st.text_input("Labels (comma-separated)", value=current_labels, key=f"sc_labels_{sc['id']}")
+
+                    save_sc = st.form_submit_button("Save Subcategory")
+                    delete_sc = st.form_submit_button("Delete Subcategory")
+
+                if save_sc:
+                    update_subcategory(
+                        sc["id"],
+                        name=sc_name,
+                        description=sc_desc,
+                        labels=[label.strip() for label in sc_labels.split(",") if label.strip()]
+                    )
+                    st.success(f"Subcategory '{sc_name}' updated!")
+                    st.rerun()
+
+                if delete_sc:
                     delete_subcategory(sc["id"])
                     st.success(f"Subcategory '{sc_name}' deleted!")
+                    st.rerun()
 
-            # Add new subcategory
-            st.subheader("➕ Add new subcategory")
-            new_sc_name = st.text_input("New subcategory name", key=f"new_sc_name_{c['id']}")
-            new_sc_desc = st.text_area("Description", key=f"new_sc_desc_{c['id']}")
-            new_labels = st.text_input("Labels (comma-separated)", key=f"new_sc_labels_{c['id']}")
-            if st.button("Add Subcategory", key=f"add_sc_{c['id']}"):
-                create_subcategory(c["id"], new_sc_name, new_sc_desc, [l.strip() for l in new_labels.split(",") if l.strip()])
-                st.success("Subcategory created!")
+            st.subheader("Add New Subcategory")
+            with st.form(f"new_subcat_form_{c['id']}"):
+                new_sc_name = st.text_input("New subcategory name", key=f"new_sc_name_{c['id']}")
+                new_sc_desc = st.text_area("Description", key=f"new_sc_desc_{c['id']}")
+                new_labels = st.text_input("Labels (comma-separated)", key=f"new_sc_labels_{c['id']}")
+                add_sc = st.form_submit_button("Add Subcategory")
+
+            if add_sc:
+                if new_sc_name.strip():
+                    create_subcategory(
+                        c["id"],
+                        new_sc_name.strip(),
+                        new_sc_desc,
+                        [label.strip() for label in new_labels.split(",") if label.strip()]
+                    )
+                    st.success("Subcategory created!")
+                    st.rerun()
+                else:
+                    st.warning("Subcategory name cannot be empty.")
 
     # Add new category
     st.subheader("➕ Add new category")
-    new_name = st.text_input("New category name", key="new_cat_name")
-    new_desc = st.text_area("Description", key="new_cat_desc")
-    new_recur = st.checkbox("Recurrent (monthly expense)?", key="new_cat_recur")
-    new_expval = st.number_input("Expected monthly (€)", min_value=0.0, format="%.2f", key="new_cat_expval")
-    if st.button("Add category"):
+    with st.form("new_category_form"):
+        new_name = st.text_input("New category name", key="new_cat_name")
+        new_desc = st.text_area("Description", key="new_cat_desc")
+        new_type = st.selectbox(
+            "Category Type",
+            options=["expense", "income", "both"],
+            format_func=lambda value: value.capitalize(),
+            key="new_cat_type"
+        )
+        new_recur = st.checkbox("Recurrent (monthly expense)?", key="new_cat_recur")
+        new_expval = st.number_input("Expected monthly (€)", min_value=0.0, format="%.2f", key="new_cat_expval")
+        add_category = st.form_submit_button("Add category")
+
+    if add_category:
         if new_name.strip():
-            create_category(new_name, new_desc, recurrent=new_recur, expected_monthly=new_expval)
+            create_category(
+                new_name.strip(),
+                new_desc,
+                recurrent=new_recur,
+                expected_monthly=new_expval,
+                category_type=new_type
+            )
             st.success("Category created!")
+            st.rerun()
+        else:
+            st.warning("Category name cannot be empty.")
 
 # -------------------------------
 # PAGE: EXPORT DATA

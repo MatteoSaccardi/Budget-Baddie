@@ -1,6 +1,5 @@
 import sqlite3
 from datetime import date
-import pandas as pd
 import json
 import os
 
@@ -21,7 +20,8 @@ def init_db():
                 name TEXT UNIQUE NOT NULL,
                 description TEXT,
                 recurrent BOOLEAN DEFAULT 0,
-                expected_monthly REAL DEFAULT 0.0
+                expected_monthly REAL DEFAULT 0.0,
+                category_type TEXT NOT NULL DEFAULT 'expense'
             )
         """)
 
@@ -68,27 +68,69 @@ def init_db():
             )
         """)
 
+        category_columns = {
+            row[1] for row in cur.execute("PRAGMA table_info(categories)").fetchall()
+        }
+        if "category_type" not in category_columns:
+            cur.execute(
+                "ALTER TABLE categories ADD COLUMN category_type TEXT NOT NULL DEFAULT 'expense'"
+            )
+
+            expense_category_ids = {
+                row[0]
+                for row in cur.execute(
+                    "SELECT DISTINCT category_id FROM expenses WHERE category_id IS NOT NULL"
+                ).fetchall()
+            }
+            income_category_ids = {
+                row[0]
+                for row in cur.execute(
+                    "SELECT DISTINCT category_id FROM income WHERE category_id IS NOT NULL"
+                ).fetchall()
+            }
+
+            for category_id in expense_category_ids | income_category_ids:
+                if category_id in expense_category_ids and category_id in income_category_ids:
+                    inferred_type = "both"
+                elif category_id in income_category_ids:
+                    inferred_type = "income"
+                else:
+                    inferred_type = "expense"
+                cur.execute(
+                    "UPDATE categories SET category_type=? WHERE id=?",
+                    (inferred_type, category_id),
+                )
+
         conn.commit()
 
 
 # -------------------------------
 # CATEGORY FUNCTIONS
 # -------------------------------
-def create_category(name, description="", recurrent=False, expected_monthly=0.0):
+def create_category(
+    name,
+    description="",
+    recurrent=False,
+    expected_monthly=0.0,
+    category_type="expense",
+):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
-            "INSERT INTO categories (name, description, recurrent, expected_monthly) VALUES (?, ?, ?, ?)",
-            (name, description, recurrent, expected_monthly)
+            """
+            INSERT INTO categories (name, description, recurrent, expected_monthly, category_type)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, description, recurrent, expected_monthly, category_type)
         )
         conn.commit()
 
-def update_category(category_id, name, description, recurrent, expected_monthly):
+def update_category(category_id, name, description, recurrent, expected_monthly, category_type):
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             UPDATE categories 
-            SET name=?, description=?, recurrent=?, expected_monthly=? 
+            SET name=?, description=?, recurrent=?, expected_monthly=?, category_type=?
             WHERE id=?
-        """, (name, description, recurrent, expected_monthly, category_id))
+        """, (name, description, recurrent, expected_monthly, category_type, category_id))
         conn.commit()
 
 def delete_category(category_id):
@@ -111,6 +153,7 @@ def list_categories():
                 "description": c["description"],
                 "recurrent": bool(c["recurrent"]),
                 "expected_monthly": c["expected_monthly"],
+                "category_type": c["category_type"],
                 "subcategories": [dict(s) for s in subs]
             })
         return result
@@ -127,11 +170,12 @@ def create_subcategory(category_id, name, description="", labels=None):
         """, (category_id, name, description, labels_json))
         conn.commit()
 
-def update_subcategory(subcategory_id, name, description):
+def update_subcategory(subcategory_id, name, description, labels=None):
+    labels_json = json.dumps(labels or [])
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            UPDATE subcategories SET name=?, description=? WHERE id=?
-        """, (name, description, subcategory_id))
+            UPDATE subcategories SET name=?, description=?, labels=? WHERE id=?
+        """, (name, description, labels_json, subcategory_id))
         conn.commit()
 
 def delete_subcategory(subcategory_id):
@@ -169,7 +213,17 @@ def list_recent_expenses(limit=20):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-            SELECT e.id, e.date, e.amount, e.currency, c.name as category, s.name as subcategory, e.description, e.expected
+            SELECT
+                e.id,
+                e.date,
+                e.amount,
+                e.currency,
+                e.category_id,
+                e.subcategory_id,
+                c.name as category,
+                s.name as subcategory,
+                e.description,
+                e.expected
             FROM expenses e
             LEFT JOIN categories c ON e.category_id = c.id
             LEFT JOIN subcategories s ON e.subcategory_id = s.id
@@ -179,6 +233,8 @@ def list_recent_expenses(limit=20):
         return [dict(r) for r in rows]
 
 def expenses_frame(year=None, month=None):
+    import pandas as pd
+
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         query = """
@@ -228,7 +284,16 @@ def list_incomes(limit=20):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
-            SELECT i.id, i.date, i.amount, i.currency, c.name as category, s.name as subcategory, i.description
+            SELECT
+                i.id,
+                i.date,
+                i.amount,
+                i.currency,
+                i.category_id,
+                i.subcategory_id,
+                c.name as category,
+                s.name as subcategory,
+                i.description
             FROM income i
             LEFT JOIN categories c ON i.category_id = c.id
             LEFT JOIN subcategories s ON i.subcategory_id = s.id
@@ -236,4 +301,3 @@ def list_incomes(limit=20):
             LIMIT ?
         """, (limit,)).fetchall()
         return [dict(r) for r in rows]
-
